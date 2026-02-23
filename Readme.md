@@ -11,4 +11,4 @@ This is a custom board designed for the **Wemos D1 Mini (ESP8266)**. It serves a
 ---
 
 ## Schematic
-![Project Schematic](images/schematic.png)
+![Project Schematic](schematic.png)
