@@ -4,6 +4,9 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 
+// Compensation auto-échauffement WiFi (ajuster si nécessaire)
+#define TEMP_OFFSET (-3.0f)
+
 // ===== WIFI AP =====
 const char* ssid = "LINKY-TIC";
 const char* password = "12345678";
@@ -263,7 +266,7 @@ void loop() {
   // Lecture BME280 toutes les 10s
   static unsigned long lastBME = 0;
   if (bmeOk && millis() - lastBME > 10000) {
-    envTemp = bme.readTemperature();
+    envTemp = bme.readTemperature() + TEMP_OFFSET;
     envHum  = bme.readHumidity();
     envPres = bme.readPressure() / 100.0;
     lastBME = millis();
