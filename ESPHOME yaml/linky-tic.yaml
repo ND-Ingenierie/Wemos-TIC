@@ -1,0 +1,289 @@
+esphome:
+  name: linky-tic
+
+esp8266:
+  board: d1_mini
+
+# Désactive les logs UART pour libérer GPIO3 (RX) pour le TIC
+logger:
+  baud_rate: 0
+
+wifi:
+  ap:
+    ssid: "LINKY-TIC"
+    password: "12345678"
+
+captive_portal:
+
+web_server:
+  port: 80
+
+ota:
+  - platform: esphome
+    password: "linky-tic"
+
+# I2C pour BME280 (D2=SDA, D1=SCL)
+i2c:
+  sda: GPIO4
+  scl: GPIO5
+  scan: false
+
+# UART pour TIC Linky — mode historique : 1200 bauds, 7E1
+# RX = GPIO3 (pin RX du Wemos D1 Mini)
+uart:
+  id: tic_uart
+  rx_pin: GPIO3
+  tx_pin: GPIO1
+  baud_rate: 1200
+  data_bits: 7
+  parity: EVEN
+  stop_bits: 1
+
+# État interne du parseur de trames TIC
+globals:
+  - id: g_in_frame
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: g_frame
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+# ─── Capteurs ────────────────────────────────────────────────────────────────
+
+sensor:
+
+  # BME280 — compensation auto-échauffement WiFi (-3°C, ajustable)
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: 10s
+    temperature:
+      name: "Température"
+      filters:
+        - offset: -3.0
+    humidity:
+      name: "Humidité"
+    pressure:
+      name: "Pression"
+
+  # TIC — Consommation instantanée
+  - platform: template
+    name: "Puissance apparente"
+    id: s_papp
+    unit_of_measurement: "VA"
+    icon: "mdi:flash"
+    update_interval: never
+
+  - platform: template
+    name: "Intensité instantanée"
+    id: s_iinst
+    unit_of_measurement: "A"
+    icon: "mdi:current-ac"
+    update_interval: never
+
+  - platform: template
+    name: "Intensité maximale"
+    id: s_imax
+    unit_of_measurement: "A"
+    icon: "mdi:current-ac"
+    update_interval: never
+
+  # ISOUSC converti en kVA (formule TIC : intensité × 200 / 1000)
+  - platform: template
+    name: "Puissance souscrite"
+    id: s_isousc
+    unit_of_measurement: "kVA"
+    icon: "mdi:lightning-bolt"
+    accuracy_decimals: 1
+    update_interval: never
+
+  # TIC — Index tarif HC/HP
+  - platform: template
+    name: "Index Heures Creuses"
+    id: s_hchc
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  - platform: template
+    name: "Index Heures Pleines"
+    id: s_hchp
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  # TIC — Index tarif Base
+  - platform: template
+    name: "Index Base"
+    id: s_base
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  # TIC — Index tarif TEMPO (6 plages)
+  - platform: template
+    name: "Tempo HC Bleu"
+    id: s_bbrhcjb
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  - platform: template
+    name: "Tempo HP Bleu"
+    id: s_bbrhpjb
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  - platform: template
+    name: "Tempo HC Blanc"
+    id: s_bbrhcjw
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  - platform: template
+    name: "Tempo HP Blanc"
+    id: s_bbrhpjw
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  - platform: template
+    name: "Tempo HC Rouge"
+    id: s_bbrhcjr
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  - platform: template
+    name: "Tempo HP Rouge"
+    id: s_bbrhpjr
+    unit_of_measurement: "Wh"
+    icon: "mdi:counter"
+    update_interval: never
+
+  # TIC — EJP
+  - platform: template
+    name: "Préavis EJP"
+    id: s_pejp
+    unit_of_measurement: "min"
+    icon: "mdi:clock-alert"
+    update_interval: never
+
+# ─── Capteurs texte ───────────────────────────────────────────────────────────
+
+text_sensor:
+
+  - platform: template
+    name: "Période tarifaire"
+    id: s_ptec
+    icon: "mdi:calendar-clock"
+    update_interval: never
+
+  - platform: template
+    name: "Option tarifaire"
+    id: s_optarif
+    icon: "mdi:tag"
+    update_interval: never
+
+  - platform: template
+    name: "Couleur demain (TEMPO)"
+    id: s_demain
+    icon: "mdi:weather-sunny"
+    update_interval: never
+
+  - platform: template
+    name: "N° compteur"
+    id: s_adco
+    icon: "mdi:identifier"
+    update_interval: never
+
+  - platform: template
+    name: "Groupe HC"
+    id: s_hhphc
+    update_interval: never
+
+  - platform: template
+    name: "Mot d'état"
+    id: s_motdetat
+    update_interval: never
+
+# ─── Parseur de trames TIC ───────────────────────────────────────────────────
+# Lecture non-bloquante toutes les 20ms.
+# Mode historique : STX(0x02) ... LF LABEL SP VALEUR SP CHECKSUM CR ... ETX(0x03)
+
+interval:
+  - interval: 20ms
+    then:
+      - lambda: |-
+          while (id(tic_uart).available()) {
+            uint8_t b;
+            if (!id(tic_uart).read_byte(&b)) break;
+            char c = (char)b;
+
+            if (c == 0x02) {                    // STX : début de trame
+              id(g_frame) = "";
+              id(g_in_frame) = true;
+
+            } else if (c == 0x03) {             // ETX : fin de trame
+              if (id(g_in_frame)) {
+                std::string& frame = id(g_frame);
+                size_t pos = 0;
+                while (pos < frame.size()) {
+                  size_t lf = frame.find('\x0A', pos);
+                  if (lf == std::string::npos) break;
+                  size_t cr = frame.find('\x0D', lf);
+                  if (cr == std::string::npos) break;
+                  if (cr > lf + 1) {
+                    std::string line = frame.substr(lf + 1, cr - lf - 1);
+                    size_t sp1 = line.find(' ');
+                    size_t sp2 = line.rfind(' ');
+                    if (sp1 != std::string::npos &&
+                        sp2 != std::string::npos && sp2 > sp1) {
+                      std::string lbl = line.substr(0, sp1);
+                      std::string val = line.substr(sp1 + 1, sp2 - sp1 - 1);
+                      float fv = (float)atof(val.c_str());
+                      // Champs texte
+                      if      (lbl == "PTEC")     id(s_ptec).publish_state(val);
+                      else if (lbl == "OPTARIF")  id(s_optarif).publish_state(val);
+                      else if (lbl == "DEMAIN")   id(s_demain).publish_state(val);
+                      else if (lbl == "ADCO")     id(s_adco).publish_state(val);
+                      else if (lbl == "HHPHC")    id(s_hhphc).publish_state(val);
+                      else if (lbl == "MOTDETAT") id(s_motdetat).publish_state(val);
+                      // Champs numériques — consommation
+                      else if (lbl == "PAPP")     id(s_papp).publish_state(fv);
+                      else if (lbl == "IINST")    id(s_iinst).publish_state(fv);
+                      else if (lbl == "IMAX")     id(s_imax).publish_state(fv);
+                      else if (lbl == "ISOUSC")   id(s_isousc).publish_state(fv * 200.0f / 1000.0f);
+                      // Index HC/HP
+                      else if (lbl == "HCHC")     id(s_hchc).publish_state(fv);
+                      else if (lbl == "HCHP")     id(s_hchp).publish_state(fv);
+                      // Index Base
+                      else if (lbl == "BASE")     id(s_base).publish_state(fv);
+                      // Index TEMPO
+                      else if (lbl == "BBRHCJB")  id(s_bbrhcjb).publish_state(fv);
+                      else if (lbl == "BBRHPJB")  id(s_bbrhpjb).publish_state(fv);
+                      else if (lbl == "BBRHCJW")  id(s_bbrhcjw).publish_state(fv);
+                      else if (lbl == "BBRHPJW")  id(s_bbrhpjw).publish_state(fv);
+                      else if (lbl == "BBRHCJR")  id(s_bbrhcjr).publish_state(fv);
+                      else if (lbl == "BBRHPJR")  id(s_bbrhpjr).publish_state(fv);
+                      // EJP
+                      else if (lbl == "PEJP")     id(s_pejp).publish_state(fv);
+                    }
+                  }
+                  pos = cr + 1;
+                }
+              }
+              id(g_in_frame) = false;
+              id(g_frame) = "";
+
+            } else if (id(g_in_frame)) {
+              id(g_frame) += c;
+              if (id(g_frame).size() > 2000) {  // protection mémoire
+                id(g_in_frame) = false;
+                id(g_frame) = "";
+              }
+            }
+          }
