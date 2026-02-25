@@ -103,7 +103,7 @@ static const char HTML_PAGE[] PROGMEM = R"rawliteral(
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0d0d0d;color:#e0e0e0;font-family:'Segoe UI',Arial,sans-serif;padding:20px;max-width:900px;margin:0 auto}
-h1{font-size:1.3rem;color:#fff;letter-spacing:3px;text-transform:uppercase;margin-bottom:20px;padding-bottom:10px;border-bottom:1px solid #222}
+h1{font-size:1.3rem;color:#fff;letter-spacing:3px;text-transform:uppercase;margin-bottom:20px;padding-bottom:10px;border-bottom:1px solid #222;display:flex;align-items:center;gap:10px}
 .section{font-size:.65rem;color:#555;text-transform:uppercase;letter-spacing:2px;margin:20px 0 10px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:4px}
 .card{background:#161616;border:1px solid #2a2a2a;border-radius:6px;padding:14px}
@@ -118,33 +118,48 @@ h1{font-size:1.3rem;color:#fff;letter-spacing:3px;text-transform:uppercase;margi
 .badge-blue{background:#1d4ed8;color:#fff}
 .badge-white{background:#e5e7eb;color:#111}
 .badge-red{background:#b91c1c;color:#fff}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
 .dot-blue{background:#60a5fa}
 .dot-white{background:#e5e7eb}
 .dot-red{background:#f87171}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.2}}
+.live{width:8px;height:8px;border-radius:50%;background:#4ade80;display:inline-block;flex-shrink:0;transition:background .15s;animation:pulse 2s infinite}
 .info-table{width:100%;border-collapse:collapse;font-size:.8rem}
 .info-table td{padding:6px 8px;border-bottom:1px solid #1e1e1e}
 .info-table td:first-child{color:#555;width:42%}
 .info-table td:last-child{color:#ccc;font-family:monospace}
-.footer{color:#333;font-size:.65rem;margin-top:20px;text-align:right}
+.footer{color:#444;font-size:.7rem;margin-top:20px;text-align:right}
 .wait{color:#333;padding:40px 0}
 </style>
 </head>
 <body>
-<h1>Linky TIC</h1>
+<h1><span class="live" id="live"></span>Linky TIC</h1>
 <div id="app"><p class="wait">Connexion au compteur...</p></div>
 <div class="footer" id="footer"></div>
 <script>
+function num(v){
+  if(v===undefined||v===null||v==='')return null;
+  var n=parseInt(v,10);
+  return isNaN(n)?v:String(n);
+}
 function q(v,u){
-  if(!v||v==='')return'<span class="card-value" style="color:#2a2a2a">--</span>';
-  return'<span class="card-value">'+v+'</span><span class="card-unit">'+u+'</span>';
+  var s=num(v);
+  if(!s)return'<span class="card-value" style="color:#2a2a2a">--</span>';
+  return'<span class="card-value">'+s+'</span><span class="card-unit">'+u+'</span>';
+}
+function qkva(v){
+  var n=parseInt(v,10);
+  if(isNaN(n))return q(null,'');
+  return'<span class="card-value">'+((n*200/1000).toFixed(1))+'</span><span class="card-unit">kVA</span>';
 }
 function badge(cls,txt,dot){
   return'<span class="badge '+cls+'">'+(dot?'<span class="dot dot-'+dot+'"></span>':'')+txt+'</span>';
 }
 function periodeBadge(ptec,optarif){
-  if(!ptec)return'';
   var isTempo=optarif&&optarif.startsWith('BBR');
+  if(!ptec){
+    return isTempo?badge('badge-base','TEMPO'):'';
+  }
   var isHP=ptec.startsWith('HP');
   var isHC=ptec.startsWith('HC');
   if(isTempo){
@@ -156,7 +171,7 @@ function periodeBadge(ptec,optarif){
   if(isHC)return badge('badge-hc','HEURE CREUSE');
   if(ptec==='TH..')return badge('badge-base','TOUTES HEURES');
   if(ptec.startsWith('PM'))return badge('badge-ejp','POINTE MOBILE');
-  return badge('badge-base',ptec);
+  return badge('badge-base',ptec.replace(/\./g,''));
 }
 function demainBadge(d){
   if(!d)return'';
@@ -174,8 +189,12 @@ function render(d){
   var isHCHP=optarif.startsWith('HC')||isTempo;
 
   /* Période */
-  html+='<div class="section">Période tarifaire</div>';
-  html+='<div style="margin-bottom:16px">'+periodeBadge(ptec,optarif)+demainBadge(d.DEMAIN)+'</div>';
+  var pb=periodeBadge(ptec,optarif);
+  var db=demainBadge(d.DEMAIN);
+  if(pb||db){
+    html+='<div class="section">Période tarifaire</div>';
+    html+='<div style="margin-bottom:16px">'+pb+db+'</div>';
+  }
 
   /* Puissance */
   html+='<div class="section">Consommation instantanée</div>';
@@ -183,7 +202,7 @@ function render(d){
   html+='<div class="card"><div class="card-label">Puissance apparente</div>'+q(d.PAPP,'VA')+'</div>';
   html+='<div class="card"><div class="card-label">Intensité</div>'+q(d.IINST,'A')+'</div>';
   html+='<div class="card"><div class="card-label">Intensité max</div>'+q(d.IMAX,'A')+'</div>';
-  html+='<div class="card"><div class="card-label">Intensité souscrite</div>'+q(d.ISOUSC,'A')+'</div>';
+  html+='<div class="card"><div class="card-label">Puissance souscrite</div>'+qkva(d.ISOUSC)+'</div>';
   html+='</div>';
 
   /* Index */
@@ -228,10 +247,14 @@ function render(d){
 
   document.getElementById('app').innerHTML=html;
   document.getElementById('footer').textContent='Mis à jour : '+new Date().toLocaleTimeString('fr-FR');
+  var dot=document.getElementById('live');
+  dot.style.animation='none';dot.style.background='#fff';
+  setTimeout(function(){dot.style.background='#4ade80';dot.style.animation='pulse 2s infinite';},200);
 }
 function update(){
   fetch('/api').then(function(r){return r.json();}).then(render).catch(function(){
     document.getElementById('footer').textContent='Erreur de connexion';
+    document.getElementById('live').style.background='#ef4444';
   });
 }
 update();
