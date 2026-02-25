@@ -15,39 +15,92 @@ Adafruit_BME280 bme;
 bool bmeOk = false;
 float envTemp = 0, envHum = 0, envPres = 0;
 
-String bufferTIC = "";
+// ===== TIC PARSED DATA =====
+// Mode historique : trames STX(0x02)...ETX(0x03)
+// Chaque groupe : LF <label> SP <valeur> SP <checksum> CR
+#define MAX_TIC_FIELDS 24
+String ticKey[MAX_TIC_FIELDS];
+String ticVal[MAX_TIC_FIELDS];
+int    ticCount = 0;
+bool   ticReady = false;
 
-// ===== PAGE WEB =====
+String frameBuffer = "";
+bool   inFrame = false;
+
+// Extrait clé/valeur d'une ligne TIC
+void parseTICFrame(const String& frame) {
+  int newCount = 0;
+  String newKey[MAX_TIC_FIELDS];
+  String newVal[MAX_TIC_FIELDS];
+
+  int pos = 0;
+  while (pos < (int)frame.length() && newCount < MAX_TIC_FIELDS) {
+    int lf = frame.indexOf('\x0A', pos);
+    if (lf < 0) break;
+    int cr = frame.indexOf('\x0D', lf);
+    if (cr < 0) break;
+
+    String line = frame.substring(lf + 1, cr);
+
+    if (line.length() > 3) {
+      int sp1 = line.indexOf(' ');
+      int sp2 = line.lastIndexOf(' ');
+      if (sp1 > 0 && sp2 > sp1) {
+        newKey[newCount] = line.substring(0, sp1);
+        newVal[newCount] = line.substring(sp1 + 1, sp2);
+        newCount++;
+      }
+    }
+    pos = cr + 1;
+  }
+
+  if (newCount > 0) {
+    for (int i = 0; i < newCount; i++) {
+      ticKey[i] = newKey[i];
+      ticVal[i] = newVal[i];
+    }
+    ticCount = newCount;
+    ticReady = true;
+  }
+}
+
+String getTIC(const String& key) {
+  for (int i = 0; i < ticCount; i++) {
+    if (ticKey[i] == key) return ticVal[i];
+  }
+  return "";
+}
+
+// ===== PAGE WEB (inchangée pour l'instant) =====
 void handleRoot() {
   String page =
     "<!DOCTYPE html><html><head>"
     "<meta charset='utf-8'>"
     "<meta http-equiv='refresh' content='1'>"
     "<style>body{background:black;color:#00ff00;font-family:monospace;}</style>"
-    "</head><body><pre>" +
-    bufferTIC +
-    "</pre></body></html>";
+    "</head><body><pre>";
 
-  server.send(200, "text/html", page);
+  for (int i = 0; i < ticCount; i++) {
+    page += ticKey[i] + "\t" + ticVal[i] + "\n";
+  }
+  if (!ticReady) page += "En attente de données TIC...\n";
+
+  page += "</pre></body></html>";
+  server.send(200, "text/html; charset=utf-8", page);
 }
 
 void setup() {
-  // ===== TIC Linky =====
-  Serial.begin(1200, SERIAL_7E1);   // RX GPIO3
+  Serial.begin(1200, SERIAL_7E1);
 
-  // ===== BME280 =====
   Wire.begin();
   bmeOk = bme.begin(0x76);
   if (!bmeOk) bmeOk = bme.begin(0x77);
 
-  // ===== WIFI AP =====
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid, password);
 
   server.on("/", handleRoot);
   server.begin();
-
-  bufferTIC = "Demarrage...\n";
 }
 
 void loop() {
@@ -62,12 +115,25 @@ void loop() {
     lastBME = millis();
   }
 
-  // Lecture TIC
+  // Lecture TIC - détection trames STX/ETX
   while (Serial.available()) {
     char c = Serial.read();
-    bufferTIC += c;
-    if (bufferTIC.length() > 4000) {
-      bufferTIC.remove(0, 2000);
+
+    if (c == 0x02) {          // STX : début de trame
+      frameBuffer = "";
+      inFrame = true;
+    } else if (c == 0x03) {   // ETX : fin de trame
+      if (inFrame) {
+        parseTICFrame(frameBuffer);
+        inFrame = false;
+        frameBuffer = "";
+      }
+    } else if (inFrame) {
+      frameBuffer += c;
+      if (frameBuffer.length() > 2000) {  // protection mémoire
+        inFrame = false;
+        frameBuffer = "";
+      }
     }
   }
 }
