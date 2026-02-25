@@ -71,7 +71,25 @@ String getTIC(const String& key) {
   return "";
 }
 
-// ===== PAGE WEB (inchangée pour l'instant) =====
+// ===== API JSON =====
+void handleAPI() {
+  String json = "{";
+  for (int i = 0; i < ticCount; i++) {
+    if (i > 0) json += ",";
+    json += "\"" + ticKey[i] + "\":\"" + ticVal[i] + "\"";
+  }
+  if (ticCount > 0) json += ",";
+  json += "\"bme_ok\":" + String(bmeOk ? "true" : "false");
+  if (bmeOk) {
+    json += ",\"bme_temp\":\"" + String(envTemp, 1) + "\"";
+    json += ",\"bme_hum\":\""  + String(envHum,  1) + "\"";
+    json += ",\"bme_pres\":\"" + String(envPres, 1) + "\"";
+  }
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+// ===== PAGE WEB =====
 void handleRoot() {
   String page =
     "<!DOCTYPE html><html><head>"
@@ -100,6 +118,7 @@ void setup() {
   WiFi.softAP(ssid, password);
 
   server.on("/", handleRoot);
+  server.on("/api", handleAPI);
   server.begin();
 }
 
